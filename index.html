@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Online Exam Demo (Tester-friendly)</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;background:#f5f7fb;color:#111}
+    .container{max-width:900px;margin:32px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 6px 18px rgba(20,20,40,0.06)}
+    h1,h2{margin:0 0 12px}
+    .row{display:flex;gap:12px}
+    .col{flex:1}
+    label{display:block;margin:8px 0 4px;font-weight:600}
+    input[type=text],input[type=password],select,textarea{width:100%;padding:10px;border:1px solid #d3d9e6;border-radius:6px}
+    button{padding:10px 14px;border-radius:6px;border:0;background:#2563eb;color:#fff;cursor:pointer}
+    button.secondary{background:#6b7280}
+    .hidden{display:none}
+    .message{padding:10px;border-radius:6px;margin:12px 0}
+    .success{background:#ecfdf5;color:#065f46;border:1px solid #bbf7d0}
+    .error{background:#fff1f2;color:#991b1b;border:1px solid #fecaca}
+    .question{border:1px dashed #e6eef8;padding:12px;border-radius:6px;margin-bottom:12px}
+    .meta{font-size:13px;color:#6b7280;margin-bottom:8px}
+    .timer{font-weight:700}
+    .foot{margin-top:16px;color:#374151;font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="container" id="app">
+    <div id="login-screen" data-screen="login">
+      <h1>Exam Portal — Login</h1>
+      <div id="login-msg" class="message hidden" role="alert"></div>
+
+      <label for="username">Username</label>
+      <input id="username" data-test="login-username" type="text" placeholder="student01" />
+
+      <label for="password">Password</label>
+      <input id="password" data-test="login-password" type="password" placeholder="Student@123" />
+
+      <div style="margin-top:12px">
+        <button id="login-btn" data-test="login-submit">Login</button>
+        <button id="login-reset" data-test="login-reset" class="secondary" style="margin-left:8px">Reset</button>
+      </div>
+
+      <p class="foot">Test accounts: <strong>student01 / Student@123</strong> or try invalid combos for negative tests.</p>
+    </div>
+
+    <div id="exam-list-screen" data-screen="list" class="hidden">
+      <h1>Available Exams</h1>
+      <div id="list-msg" class="message hidden" role="alert"></div>
+
+      <div class="meta">Logged in as <span id="logged-user"></span> — <button id="logout" class="secondary" data-test="logout-btn">Logout</button></div>
+
+      <ul id="exam-list">
+        <!-- populated by JS -->
+      </ul>
+    </div>
+
+    <div id="exam-screen" data-screen="exam" class="hidden">
+      <h1 id="exam-title">Exam</h1>
+      <div class="meta">Student: <span id="exam-user"></span> | Time left: <span id="timer" class="timer">--:--</span></div>
+      <div id="exam-msg" class="message hidden" role="alert"></div>
+
+      <form id="exam-form">
+        <div id="questions-area">
+          <!-- questions inserted here -->
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <button id="submit-exam" type="button" data-test="submit-exam">Submit Exam</button>
+          <button id="save-draft" type="button" class="secondary" data-test="save-draft">Save Draft</button>
+          <button id="back-to-list" type="button" class="secondary" data-test="back-list">Back</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="result-screen" data-screen="result" class="hidden">
+      <h2>Submission Result</h2>
+      <div id="result-msg" class="message success" role="status"></div>
+      <div id="result-details" class="foot"></div>
+      <div style="margin-top:12px">
+        <button id="result-back" data-test="result-back">Back to Exams</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /*************************************************************************
+     * Simple front-end demo for testing purposes
+     * - Designed to let testers exercise login -> select -> attempt -> submit
+     * - Exposes stable ids and data-test attributes for automation scripts
+     *************************************************************************/
+    const app = {
+      users: { "student01": "Student@123", "student02": "Pass@456" },
+      exams: [
+        { id: "math101", title: "Math 101 - Algebra", durationSec: 5*60, questions: [
+          { id: "q1", type: "mcq", text: "2 + 2 = ?", choices: ["3","4","5"] },
+          { id: "q2", type: "text", text: "Explain Pythagoras theorem (short)" },
+          { id: "q3", type: "mcq", text: "Which is prime?", choices: ["4","9","7"] },
+        ]},
+        { id: "eng201", title: "English - Comprehension", durationSec: 3*60, questions: [
+          { id: "e1", type: "text", text: "Summarize the passage in 30 words." },
+          { id: "e2", type: "mcq", text: "Identify the tone of the passage", choices: ["formal","informal","neutral"] },
+        ]}
+      ],
+      state: {
+        currentUser: null,
+        currentExam: null,
+        timerInterval: null,
+        remainingSec: 0
+      }
+    };
+
+    // Helpers for testing automation: show messages and expose test hooks
+    function showMessage(containerId, text, type='error') {
+      const el = document.getElementById(containerId);
+      el.className = 'message ' + (type === 'success' ? 'success' : 'error');
+      el.textContent = text;
+      el.classList.remove('hidden');
+      if(type === 'success') setTimeout(()=>el.classList.add('hidden'), 5000);
+    }
+    function hideMessage(containerId){ document.getElementById(containerId).classList.add('hidden'); }
+
+    // Screen navigation
+    function showScreen(name){
+      document.querySelectorAll('[data-screen]').forEach(s=>s.classList.add('hidden'));
+      document.querySelector(`[data-screen="${name}"]`).classList.remove('hidden');
+    }
+
+    // LOGIN logic (simple, for UI testing)
+    document.getElementById('login-btn').addEventListener('click', () => {
+      hideMessage('login-msg');
+      const user = document.getElementById('username').value.trim();
+      const pass = document.getElementById('password').value;
+      if(!user || !pass){
+        showMessage('login-msg','Username and password are required.');
+        return;
+      }
+      if(app.users[user] && app.users[user] === pass){
+        app.state.currentUser = user;
+        document.getElementById('logged-user').textContent = user;
+        loadExamList();
+        showScreen('list');
+      } else {
+        showMessage('login-msg','Invalid credentials.'); // negative test target
+      }
+    });
+
+    document.getElementById('login-reset').addEventListener('click', () => {
+      document.getElementById('username').value = '';
+      document.getElementById('password').value = '';
+      hideMessage('login-msg');
+    });
+
+    document.getElementById('logout').addEventListener('click', () => {
+      app.state.currentUser = null;
+      showScreen('login');
+    });
+
+    // build exam list with stable ids and data-test
+    function loadExamList(){
+      const list = document.getElementById('exam-list');
+      list.innerHTML = '';
+      app.exams.forEach(ex => {
+        const li = document.createElement('li');
+        li.style.marginBottom = '10px';
+        li.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <strong>${ex.title}</strong>
+              <div class="meta">id: <code>${ex.id}</code> • duration: ${Math.round(ex.durationSec/60)} min</div>
+            </div>
+            <div>
+              <button data-test="start-${ex.id}" id="start-${ex.id}" class="start-exam">Start</button>
+            </div>
+          </div>
+        `;
+        list.appendChild(li);
+        document.getElementById(`start-${ex.id}`).addEventListener('click', ()=>startExam(ex.id));
+      });
+    }
+
+    // Start exam: render questions; restore draft if exists
+    function startExam(examId){
+      const exam = app.exams.find(e=>e.id===examId);
+      if(!exam){ showMessage('list-msg','Exam not found.'); return; }
+      app.state.currentExam = exam;
+      document.getElementById('exam-title').textContent = exam.title;
+      document.getElementById('exam-user').textContent = app.state.currentUser;
+      renderQuestions();
+      // timer setup
+      app.state.remainingSec = exam.durationSec;
+      updateTimerText();
+      if(app.state.timerInterval) clearInterval(app.state.timerInterval);
+      app.state.timerInterval = setInterval(()=> {
+        app.state.remainingSec--;
+        updateTimerText();
+        if(app.state.remainingSec <= 0){
+          clearInterval(app.state.timerInterval);
+          autoSubmit('time-expired');
+        }
+      },1000);
+      showScreen('exam');
+    }
+
+    function updateTimerText(){
+      const t = app.state.remainingSec;
+      const mm = String(Math.floor(t/60)).padStart(2,'0');
+      const ss = String(t%60).padStart(2,'0');
+      document.getElementById('timer').textContent = `${mm}:${ss}`;
+    }
+
+    // Render questions with stable ids and data-test attributes
+    function renderQuestions(){
+      const area = document.getElementById('questions-area');
+      area.innerHTML = '';
+      const exam = app.state.currentExam;
+      // load saved draft
+      const draftKey = `draft:${app.state.currentUser}:${exam.id}`;
+      const saved = JSON.parse(localStorage.getItem(draftKey) || '{}');
+
+      exam.questions.forEach((q, idx) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'question';
+        wrapper.id = `qwrap-${q.id}`;
+        let html = `<div class="meta">Q${idx+1} • id: <code>${q.id}</code></div>`;
+        html += `<div><strong>${q.text}</strong></div><div style="margin-top:8px">`;
+        if(q.type === 'mcq'){
+          q.choices.forEach((c,ci)=> {
+            const checked = saved[q.id] && saved[q.id] === c ? 'checked' : '';
+            html += `<label><input data-test="input-${q.id}" name="${q.id}" type="radio" value="${escapeHtml(c)}" ${checked}/> ${escapeHtml(c)}</label><br/>`;
+          });
+        } else {
+          const val = saved[q.id] || '';
+          html += `<textarea data-test="input-${q.id}" id="${q.id}" name="${q.id}" rows="4" placeholder="Write your answer...">${escapeHtml(val)}</textarea>`;
+        }
+        html += `</div>`;
+        wrapper.innerHTML = html;
+        area.appendChild(wrapper);
+      });
+    }
+
+    // Save draft button
+    document.getElementById('save-draft').addEventListener('click', () => {
+      saveDraft();
+      showMessage('exam-msg','Draft saved locally.', 'success');
+    });
+
+    // Back to list
+    document.getElementById('back-to-list').addEventListener('click', () => {
+      if(app.state.timerInterval) clearInterval(app.state.timerInterval);
+      showScreen('list');
+    });
+
+    // Submit exam button
+    document.getElementById('submit-exam').addEventListener('click', () => submitExam('manual'));
+
+    // Auto-submit (timer expired)
+    function autoSubmit(reason){
+      submitExam(reason);
+    }
+
+    // Build payload and validate
+    function collectAnswers(){
+      const exam = app.state.currentExam;
+      const answers = {};
+      let answeredCount = 0;
+      exam.questions.forEach(q => {
+        const els = document.querySelectorAll(`[name="${q.id}"]`);
+        if(q.type === 'mcq'){
+          const checked = [...els].find(e=>e.checked);
+          if(checked){ answers[q.id] = checked.value; answeredCount++; }
+        } else {
+          const ta = document.getElementById(q.id);
+          if(ta && ta.value.trim().length){
+            answers[q.id] = ta.value.trim();
+            answeredCount++;
+          }
+        }
+      });
+      return { answers, answeredCount };
+    }
+
+    // Submission logic (simulated)
+    function submitExam(trigger){
+      hideMessage('exam-msg');
+      const {answers, answeredCount} = collectAnswers();
+      const total = app.state.currentExam.questions.length;
+      if(answeredCount === 0){
+        showMessage('exam-msg','You have not answered any question. Submission blocked.','error');
+        return;
+      }
+      // simulated server response
+      const payload = {
+        user: app.state.currentUser,
+        examId: app.state.currentExam.id,
+        answers,
+        submittedAt: new Date().toISOString(),
+        trigger
+      };
+      // clear draft after successful submission
+      localStorage.removeItem(`draft:${app.state.currentUser}:${app.state.currentExam.id}`);
+      if(app.state.timerInterval) clearInterval(app.state.timerInterval);
+      // show result screen
+      document.getElementById('result-msg').textContent = `Submission received for ${payload.user} (${payload.examId}).`;
+      document.getElementById('result-details').innerHTML = `
+        <strong>Answered:</strong> ${answeredCount}/${total}<br/>
+        <strong>Trigger:</strong> ${trigger}<br/>
+        <strong>Timestamp:</strong> ${payload.submittedAt}
+      `;
+      showScreen('result');
+    }
+
+    document.getElementById('result-back').addEventListener('click', ()=> {
+      app.state.currentExam = null;
+      showScreen('list');
+    });
+
+    // Save draft helper
+    function saveDraft(){
+      const exam = app.state.currentExam;
+      const draftKey = `draft:${app.state.currentUser}:${exam.id}`;
+      const data = {};
+      exam.questions.forEach(q => {
+        if(q.type === 'mcq'){
+          const checked = document.querySelector(`[name="${q.id}"]:checked`);
+          if(checked) data[q.id] = checked.value;
+        } else {
+          const ta = document.getElementById(q.id);
+          if(ta) data[q.id] = ta.value;
+        }
+      });
+      localStorage.setItem(draftKey, JSON.stringify(data));
+    }
+
+    // Helper to escape HTML inside template values
+    function escapeHtml(s){ if(!s) return ''; return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+    // Simple auto-save every 20 seconds (simulate network / resilience tests)
+    setInterval(()=> {
+      if(app.state.currentExam && app.state.currentUser){
+        saveDraft();
+        // expose autosave event in window for automation checks
+        window.lastAutoSavedAt = new Date().toISOString();
+      }
+    },20000);
+
+    // Small utility: prefill login fields for convenience (makes positive tests easy)
+    window.onload = () => {
+      document.getElementById('username').value = 'student01';
+      document.getElementById('password').value = 'Student@123';
+    };
+
+    // Expose some functions for automated tests to call from browser console (optional)
+    window.testHelpers = {
+      login: (u,p) => { document.getElementById('username').value = u; document.getElementById('password').value = p; document.getElementById('login-btn').click(); },
+      startExamById: (id) => document.getElementById(`start-${id}`).click(),
+      clickSubmit: () => document.getElementById('submit-exam').click(),
+      saveDraft: () => document.getElementById('save-draft').click(),
+      getTimer: () => document.getElementById('timer').textContent,
+      getMessages: () => ({
+        login: document.getElementById('login-msg').textContent || '',
+        exam: document.getElementById('exam-msg').textContent || '',
+        list: document.getElementById('list-msg').textContent || ''
+      }),
+      // fill answers quickly
+      fillAll: (text='Sample answer') => {
+        const exam = app.state.currentExam;
+        if(!exam) return;
+        exam.questions.forEach(q => {
+          if(q.type === 'mcq'){
+            const input = document.querySelector(`[name="${q.id}"]`);
+            if(input) input.click();
+          } else {
+            const ta = document.getElementById(q.id);
+            if(ta) ta.value = text;
+          }
+        });
+      }
+    };
+  </script>
+</body>
+</html>
